@@ -5588,7 +5588,17 @@ def handle_web_preview(query: dict):
             "SELECT * FROM web_projects WHERE id=? AND user_id=?",
             (project_id, user_id)
         ).fetchone()
-    
+
+    if not proj:
+        send_message(query["message"]["chat"]["id"], "❌ پروژه یافت نشد!")
+        return
+
+    # ستون‌های کوتاه، نسخهٔ قابل ویرایش فعلی پروژه هستند. ستون‌های *_code
+    # برای سازگاری با نسخه‌های قدیمی نگه‌داری می‌شوند.
+    html_code = proj["html"] if proj["html"] is not None else proj["html_code"]
+    css_code = proj["css"] if proj["css"] is not None else proj["css_code"]
+    js_code = proj["js"] if proj["js"] is not None else proj["js_code"]
+
     # ترکیب کدها
     full_html = f"""<!DOCTYPE html>
 <html dir="rtl" lang="fa">
@@ -5597,13 +5607,13 @@ def handle_web_preview(query: dict):
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{proj['project_name']}</title>
     <style>
-        {proj['css_code']}
+        {css_code or ''}
     </style>
 </head>
 <body>
-    {proj['html_code']}
+    {html_code or ''}
     <script>
-        {proj['js_code']}
+        {js_code or ''}
     </script>
 </body>
 </html>"""
@@ -5727,12 +5737,17 @@ def handle_web_download_preview(query: dict, project_id: int):
     )
 
 
-def handle_web_delete_project(query: dict):
-    """حذف پروژه (تایید دوبار)"""
+def handle_web_delete_project(query: dict, project_id: int):
+    """نمایش تأیید حذف برای همان پروژه‌ای که در callback انتخاب شده است."""
     user_id = query["from"]["id"]
-    state = get_state(user_id)
-    project_id = state.get("data", {}).get("project_id")
-    
+    with get_db() as conn:
+        project = conn.execute(
+            "SELECT id FROM web_projects WHERE id=? AND user_id=?", (project_id, user_id)
+        ).fetchone()
+    if not project:
+        answer_callback(query["id"], "❌ پروژه یافت نشد.", True)
+        return
+
     edit_message(query["message"]["chat"]["id"],
         query["message"]["message_id"],
         "⚠️ *حذف پروژه*\n\n"
@@ -5829,8 +5844,8 @@ def handle_web_add_element(query: dict, element_type: str):
 
     new_html = (proj["html"] or "") + "\n" + snippet
     with get_db() as conn:
-        conn.execute("UPDATE web_projects SET html=?, updated_at=? WHERE id=?",
-                     (new_html, datetime.now().isoformat(), project_id))
+        conn.execute("UPDATE web_projects SET html=?, html_code=?, updated_at=? WHERE id=?",
+                     (new_html, new_html, datetime.now().isoformat(), project_id))
         conn.commit()
 
     edit_message(chat_id, msg_id,
@@ -5873,8 +5888,8 @@ def handle_web_css_helper(query: dict, css_type: str):
         if proj:
             new_css = (proj["css"] or "") + "\n/* " + name + " */\n" + snippet
             with get_db() as conn:
-                conn.execute("UPDATE web_projects SET css=?, updated_at=? WHERE id=?",
-                             (new_css, datetime.now().isoformat(), project_id))
+                conn.execute("UPDATE web_projects SET css=?, css_code=?, updated_at=? WHERE id=?",
+                             (new_css, new_css, datetime.now().isoformat(), project_id))
                 conn.commit()
             edit_message(chat_id, msg_id,
                 f"✅ کد CSS *{name}* اضافه شد!\n\n`{snippet}`",
@@ -5920,8 +5935,8 @@ def handle_web_js_snippet(query: dict, js_type: str):
         if proj:
             new_js = (proj["js"] or "") + "\n// " + name + "\n" + snippet
             with get_db() as conn:
-                conn.execute("UPDATE web_projects SET js=?, updated_at=? WHERE id=?",
-                             (new_js, datetime.now().isoformat(), project_id))
+                conn.execute("UPDATE web_projects SET js=?, js_code=?, updated_at=? WHERE id=?",
+                             (new_js, new_js, datetime.now().isoformat(), project_id))
                 conn.commit()
             edit_message(chat_id, msg_id,
                 f"✅ کد JS *{name}* اضافه شد!\n\n`{snippet[:120]}`",
@@ -8221,7 +8236,7 @@ def handle_callback_query(update: dict):
         handle_web_download_preview(query, int(data.split(":")[1]))
     elif data.startswith("web_delete:"):
         project_id = int(data.split(":")[1])
-        handle_web_delete_project(query)
+        handle_web_delete_project(query, project_id)
     elif data.startswith("web_delete_confirm:"):
         project_id = int(data.split(":")[1])
         handle_web_delete_confirm(query, project_id)
@@ -9036,8 +9051,8 @@ def handle_message(update):
     # ─── state های دستیار وب ───
     elif st == "web_project_name":
         proj_name = text.strip()
-        if not proj_name:
-            send_message(chat_id, "❌ نام پروژه نمی‌تواند خالی باشد.")
+        if not 2 <= len(proj_name) <= 30:
+            send_message(chat_id, "❌ نام پروژه باید بین ۲ تا ۳۰ کاراکتر باشد.")
             return
         template_type = state["data"].get("template", "blank")
         tpl = WEB_TEMPLATES_DATA.get(template_type, {})
